@@ -1,0 +1,441 @@
+---
+title: "Projekt 2 - Metody Bayesowskie"
+author: "Weronika Kowalczyk, Filip Sass-Gustkiewicz, Dawid Potoczek"
+date: '2022-06-08'
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(message=FALSE, warning = FALSE)
+```
+
+```{=html}
+<style>
+body {
+text-align: justify}
+</style>
+```
+```{r libraries, include=FALSE}
+library(lmtest)
+library(car)
+library(readxl)
+library(metRology)
+library(bayesAB)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(HDInterval)
+library(kableExtra)
+library(Metrics)
+library(car)
+library(MASS)
+library(invgamma)
+library(psych)
+```
+
+## Cel projektu
+
+Celem projektu jest zastosowanie wnioskowanie bayesowskie w modelu regresji wielorakiej. Projekt podzielony jest na kilka częsci. Pierwsza dotyczy analizy zbioru danych oraz analizy rozkładu a priori. W drugiej części tworzony jest rozkład a posteriori, wyznaczane są rozkłady brzegowe oraz powstają bayesowskie estymatory parametrów modelu. W ostatniej częśći budowane są predykcje i przeprowadzana jest analiza porównacza zastosowanych metod i modeli w różnych konfiguracjach.
+
+## Zestaw danych
+
+Dane pochodzą ze zbioru Concrete Compressive Strength dostępnej na stronie [Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Concrete+Compressive+Strength). Zestaw zawiera informacje dotyczące wytrzymałości betonu w zależności od wybranych czynników. Zbiór danych składa się z 1030 obserwacji oraz 4 zmienne przedstawione w poniżej
+
+-   **Cement** : ilość cementu [kg] w mieszaninie m3
+-   **BFS** : Ilość żużla wielkopiecowego w mieszaninie m3
+-   **Age** : Wiek położonego betonu w dniach
+-   **CCS**: Wytrzymałość betonu mierzona w MPa. (Zmienna objaśniana)
+
+## Statystyki opisowe
+
+```{r downl_data}
+Concrete <- read_excel("C:/Users/Filip/OneDrive/Metody Bayesowskie/P2/Concrete_Data.xlsx",
+                       col_types = c("numeric", "numeric", "numeric","numeric", "numeric", "numeric","numeric", "numeric", "numeric"))
+Concrete<-Concrete[,c(1,2,8,9)]
+describe(Concrete)
+```
+
+## Podział zbioru danych
+
+Na początku analizy zdecydowano się podzielić dane na 3 zbiory o liczności 250, 740 oraz 5 obserwacji, które odpowiadają zbiorowi danych a priori służącym do zbudowaniu modelu MNK, danym wykorzystanym do porównania klasycznych estymatorów z ich bayesowskimi odpowiednikami oraz obserwacjom testowym.
+
+```{r}
+# Podział zbioru danych
+data_apriori <- Concrete[c(1:250),] 
+data <- Concrete[c(251:1000),]
+data_test <- Concrete[c(1001:1005),]
+```
+
+## Rozkład a priori
+
+### Model MNK
+
+Aby wyestymować parametry rozkładu a priori posłużono się modelem regresji liniowej
+
+```{r}
+model_apriori <- lm(data = data_apriori, formula = CCS ~ .)
+summary(model_apriori)
+```
+Zmiennymi istotnymi są wszystkie zmienne, tj Cement, BFS oraz Age, jednakże stała nie jest istotna. Dopasowanie modelu jest na względnie niskim poziomie 48%. Łącznie wszystkie zmienne objaśniające są istotne, co sugeruje wynik testu F.
+
+<br/>
+
+### Parametry rozkładu a priori
+
+Wykorzystując powyższy model wyznaczono następujące parametry rozkładu a priori:
+
+- Macierz X0
+- Alfa0
+- Wektor współczynników modelu Beta0
+- Sumę kwadratów reszt Delta0
+- Macierz Sigma0
+
+```{r}
+X0 <- matrix(data = c(rep(1, 250) , data_apriori$Cement, data_apriori$BFS, data_apriori$Age), ncol = 4)
+alfa0 <- nrow(data_apriori)-ncol(data_apriori)
+beta0 <- as.vector(model_apriori$coefficients)
+delta0 <- sum(model_apriori$residuals^2)
+sigma0 <- solve(t(X0) %*% X0)
+```
+
+<br/>
+
+## Rozkład a posteriori
+
+### Model MNK
+
+Kolejnym krokiem w drodze do wyestymowania parametrów a posteriori było stworzenie modelu liniowego na największym zestawie danych liczącym 750 obserwacji.
+
+```{r}
+modelMNK <- lm(data = data, formula = CCS ~ .)
+MNKBeta <- modelMNK$coefficients
+summary(modelMNK)
+```
+Zanotowano wzrost istotności poszczególnych parametrów oraz znaczny spadek wartości współczynnika R^2. Co ważne, stała w tym modelu jest róznież statystycznie istotna, a wszystkie parametry zachowały swój znak.
+
+<br/>
+
+Z zaprezentowanego wyżej modelu można wnioskować że:
+
+- Wzrost ilości cementu o 1 kg w 1 m^3 betonu sprawi że będzie on wytrzymalszy o 0,07 MPa (ceteris paribus)
+- Wraz z przyrostem ilości żużlu o 1 kg w 1 m^3 betonu, mieszanka będzie on wytrzymalsza o 0,04 MPa (ceteris paribus)
+- Z każdym dniem wiązania mieszanki betonu, będzie on wytrzymalszy o 0,1 MPa (ceteris paribus)
+
+<br/>
+
+### Weryfikacja założeń
+
+Na tym etapie zdecydowano się zweryfikować postawowe założenia regresji wielorakiej mówiące o normalności rozkładu reszt, autokorelacji oraz homoskedastyczności.
+```{r echo=FALSE}
+shapiro.test(modelMNK$residuals)
+```
+Wniosek: **Nie ma rozkładu normalnego składników losowych**
+```{r echo=FALSE}
+dwtest(modelMNK)
+```
+Wniosek: **Odrzucenie H0 - reszty w modelu są skorelowane**
+```{r echo=FALSE}
+gqtest(modelMNK)
+```
+Wniosek: **Reszty w modelu są homoskedastyczne, ponieważ p-value > 0,05**
+
+<br/>
+
+### Parametry a posteriori
+
+Przystąpiono zatem do estymacji parametrów rozkładu a posteriori, których wartości zaprezentowano poniżej:
+
+```{r}
+X <- matrix(data = c( rep(1, nrow(data)) , data$Cement, data$BFS, data$Age ), ncol = 4)
+sigma0 <- as.matrix(sigma0)
+y <- as.matrix(data.frame(y = data$CCS))
+
+sigma1 <- solve( t(X) %*% X + solve(sigma0))
+beta1 <- as.vector(sigma1 %*% ( t(X) %*% y + solve(sigma0) %*% beta0))
+alfa1 <- alfa0 + nrow(data)
+delta1 <- delta0 + t(y) %*% y - t(beta1) %*% solve(sigma1) %*% beta1 + t(beta0)%*%solve(sigma0)%*%beta0
+
+prms = list(alfa1 = alfa1, delta1 = as.numeric(delta1), sigma1 = sigma1, beta1 = beta1)
+prms
+```
+
+## Rozkłady brzegowe parametrów
+
+Na podstawie parametrów modelu regresji liniowej obliczono rozkłady brzegowe parametrów modelu i macierzy sigma^2
+
+```{r echo=TRUE}
+plot0 = plotInvGamma(shape = alfa0/2, scale = delta0/2) +
+  ggtitle('Sigma^2: Rozkład a priori')
+plot1 = plotInvGamma(shape = prms$alfa1/2, scale = prms$delta1/2) +
+  ggtitle('Sigma^2: Rozkład a posteriori')
+
+grid.arrange(nrow = 1, plot0,plot1)
+```
+
+Widoczne na powyższych wykresach są podobieńśtwa pomiędzy rozkładami, jednakże w rozkładzie a posteriori pewność jest niemal dwukrotnie większa. Przedziały na nowych danych są nieznacznie mniejsze od danych a priori.
+
+<br/>
+
+Poniżej zaprezentowano rozkłady poszczególnych zmiennych dla rozkładu a priori oraz a posteriori, gdzie wykorzystano rozkład t-studenta, ponieważ korzystano z parametrów ze "starych" badań i modelu. Skalowalne parametry tego rozkładu obliczono przy pomocy funkcji:
+
+```{r}
+scale_fun <- function(alpha, delta, sigma){
+  scale_fun <- delta/alpha*sigma
+  return(scale_fun)
+}
+```
+
+
+#### Dane a priori:
+
+```{r}
+par(mfrow=c(2,2))
+plot(dt.scaled(x=seq(-40,40), df=alfa0, mean = beta0[1], sd=scale_fun(alfa0, delta0, sigma0[1,1])), x=seq(-40,40), type='l', lwd=2, xlab = "")
+plot(dt.scaled(x=seq(0.08,0.1,0.00001), df=alfa0, mean = beta0[2], sd=scale_fun(alfa0, delta0, sigma0[2,2])), type='l',x=seq(0.08,0.1,0.00001), xlab="")
+plot(dt.scaled(x=seq(0.07,0.08,0.00001), df=alfa0, mean = beta0[3], sd=scale_fun(alfa0, delta0, sigma0[3,3])), type='l', x=seq(0.07,0.08,0.00001), xlab="")
+plot(dt.scaled(x=seq(0.04,0.05,0.00001), df=alfa0, mean = beta0[4], sd=scale_fun(alfa0, delta0, sigma0[4,4])), type='l', x=seq(0.04,0.05,0.00001), xlab = "")
+```
+
+#### Dane a posteriori:
+```{r}
+par(mfrow=c(2,2))
+plot(dt.scaled(x=seq(-20,20), df=alfa1, mean = beta1[1], sd=scale_fun(alfa1, delta1, sigma1[1,1])), type='l', x=seq(-20,20), xlab="", lwd=2)
+plot(dt.scaled(x=seq(0.0885,0.089,0.00001), df=alfa1, mean = beta1[2], sd=scale_fun(alfa1, delta1, sigma1[2,2])), type='l', x=seq(0.0885,0.089,0.00001), xlab="")
+plot(dt.scaled(x=seq(0.05,0.06,0.00001), df=alfa1, mean = beta1[3], sd=scale_fun(alfa1, delta1, sigma1[3,3])), type='l', x=seq(0.05,0.06,0.00001), xlab="")
+plot(dt.scaled(x=seq(0.07,0.08,0.0001), df=alfa1, mean = beta1[4], sd=scale_fun(alfa1, delta1, sigma1[4,4])), type='l', xlab = "", x=seq(0.07,0.08,0.0001))
+
+```
+
+## Bayesowskie estymatory parametrów modelu
+
+### Wartości estymatora
+
+W kolejnym kroku obliczono estymator bayesowski dla każdej wartości wektora beta1.
+
+```{r}
+BayBeta <- as.vector(prms$beta1)
+columns <- names(MNKBeta)
+names(BayBeta) <- columns
+BayBeta
+```
+
+Wyznaczone parametry można estymować w następujący sposób:
+
+- Wzrost ilości cementu o 1 kg w 1 m^3 betonu sprawi że będzie on wytrzymalszy o 0,09 MPa (ceteris paribus)
+- Wraz z przyrostem ilości żużlu o 1 kg w 1 m^3 betonu, mieszanka będzie on wytrzymalsza o 0,06 MPa (ceteris paribus)
+- Z każdym dniem wiązania mieszanki betonu, będzie on wytrzymalszy o 0,07 MPa (ceteris paribus)
+
+<br/>
+
+### HDPI
+
+Celem weryfikacji istotności powyższych parametrów wyznaczono ich HPDI *(Highest Posterior Density Interval)*. Kluczowe dla istotności parametrów jest, aby żaden przedział nie zawierał zera.
+
+```{r}
+hdi(rt.scaled(n=1000, df=alfa1, mean = beta1[1], sd=scale_fun(alfa1, delta1, sigma1[1,1])))
+hdi(rt.scaled(n=1000, df=alfa1, mean = beta1[2], sd=scale_fun(alfa1, delta1, sigma1[2,2])))
+hdi(rt.scaled(n=1000, df=alfa1, mean = beta1[3], sd=scale_fun(alfa1, delta1, sigma1[3,3])))
+hdi(rt.scaled(n=1000, df=alfa1, mean = beta1[4], sd=scale_fun(alfa1, delta1, sigma1[4,4])))
+```
+
+Jedyny przedział zawierający w sobie zero to ten opisujący stałą w modelu. Interpretować to należy jako jej brak istotności statystycznej co pokrywa się z pierwszym wyestymowanym modelem opartym na danych a priori.
+
+<br/>
+
+### Porównanie
+
+Poniżej zestawiono ze sobą wartości parametrów uzyskane metodą najmniejszych kwadratów oraz bayesowską.
+
+```{r}
+MNKBeta # Metoda najmniejszych kwadratów:
+BayBeta # Metoda Bayesowska
+```
+
+Co istotne, odnotowano dużą zmianę wartości dla stałej w modelu, jednak pozostałe parametry są na zbliżonym poziomie
+
+## Prognozy
+
+Celem stworzenia prognoz Bayesowskich wyznaczono w pierwszym kroku rozkłady predykcyjne. Prognozy zostały obliczone dla pięciu obserwacji zawartych w osobnym zbiorze danych testowych.
+
+### Rozkłady predykcyjne
+
+```{r}
+alfa1 <- prms$alfa1
+
+Xt <- matrix(data = c( rep(1, nrow(data_test)) , data_test$Cement, data_test$BFS, data_test$Age ), ncol = 4)
+ex <- Xt %*% as.matrix(prms$beta1)
+
+scale <- (prms$delta1 / alfa1) * (diag(1,ncol = nrow(data_test), nrow =nrow(data_test) ) +  Xt %*% as.matrix(prms$sigma1) %*% t(Xt) )
+
+
+brzegoweY <- list()
+
+for (i in 1:length(ex)){
+  
+  brzegoweY <- c(brzegoweY, list(c(ex = ex[i], scale = scale[i,i], alfa = alfa1)))
+  names(brzegoweY)[i] <- paste0("yp", as.character(i))
+}
+
+```
+
+Rozkłady predykcyjne dla Y prezentują się następująco:
+```{r}
+library(pls)
+par(mfrow=c(3,2))
+
+pred_plot = function(brzegoweY, yp,sequence_x){
+  dist_y <- dt.scaled(df = brzegoweY[[yp]][[3]], mean = brzegoweY[[yp]][[1]], sd = brzegoweY[[yp]][[2]], x = sequence_x )
+}
+
+
+dist_1 = pred_plot(brzegoweY,"yp1", seq(brzegoweY[["yp1"]][[1]] - 3.5 * brzegoweY[["yp1"]][[2]],
+                                         brzegoweY[["yp1"]][[1]] + 3.5 * brzegoweY[["yp1"]][[2]]))
+plot(dist_1, x = seq(brzegoweY[["yp1"]][[1]] - 3.5 * brzegoweY[["yp1"]][[2]],
+                     brzegoweY[["yp1"]][[1]] + 3.5 * brzegoweY[["yp1"]][[2]]),
+     xlab = "", type = "l", lwd = 2)
+
+dist_2 = pred_plot(brzegoweY,"yp2", seq(brzegoweY[["yp2"]][[1]] - 3.5 * brzegoweY[["yp2"]][[2]],
+                                         brzegoweY[["yp2"]][[1]] + 3.5 * brzegoweY[["yp2"]][[2]]))
+plot(dist_2, x = seq(brzegoweY[["yp2"]][[1]] - 3.5 * brzegoweY[["yp2"]][[2]],
+                     brzegoweY[["yp2"]][[1]] + 3.5 * brzegoweY[["yp2"]][[2]]),
+     xlab = "", type = "l", lwd = 2)
+
+dist_3 = pred_plot(brzegoweY,"yp3", seq(brzegoweY[["yp3"]][[1]] - 3.5 * brzegoweY[["yp3"]][[2]],
+                                         brzegoweY[["yp3"]][[1]] + 3.5 * brzegoweY[["yp3"]][[2]]))
+plot(dist_3, x = seq(brzegoweY[["yp3"]][[1]] - 3.5 * brzegoweY[["yp3"]][[2]],
+                     brzegoweY[["yp3"]][[1]] + 3.5 * brzegoweY[["yp3"]][[2]]),
+     xlab = "", type = "l", lwd = 2)
+
+dist_4 = pred_plot(brzegoweY,"yp4", seq(brzegoweY[["yp4"]][[1]] - 3.5 * brzegoweY[["yp4"]][[2]],
+                                         brzegoweY[["yp4"]][[1]] + 3.5 * brzegoweY[["yp4"]][[2]]))
+plot(dist_4, x = seq(brzegoweY[["yp4"]][[1]] - 3.5 * brzegoweY[["yp4"]][[2]],
+                     brzegoweY[["yp4"]][[1]] + 3.5 * brzegoweY[["yp4"]][[2]]),
+     xlab = "", type = "l", lwd = 2)
+dist_5 = pred_plot(brzegoweY,"yp5", seq(brzegoweY[["yp5"]][[1]] - 3.5 * brzegoweY[["yp5"]][[2]],
+                                         brzegoweY[["yp5"]][[1]] + 3.5 * brzegoweY[["yp5"]][[2]]))
+plot(dist_5, x = seq(brzegoweY[["yp5"]][[1]] - 3.5 * brzegoweY[["yp5"]][[2]],
+                     brzegoweY[["yp5"]][[1]] + 3.5 * brzegoweY[["yp5"]][[2]]),
+     xlab = "", type = "l", lwd = 2)
+```
+
+Warto zauważyć, że wszystkie rozkłady predykcji wyglądają bardzo podobnie, na co duży wpływ ma podobieństwo obserwacji testowych. 
+
+<br/>
+
+### Prognozy wartości
+
+W poniższej tabeli zawarto porównanie prognoz uzyskanych za pomocą metody Bayesa z probnozami uzyskanymi MNK oraz wartościami rzeczywistymi.
+
+```{r}
+MNK_pred <- predict(modelMNK,data_test)
+dot = data.frame(MNK = MNK_pred, Bayes=ex, rzeczywiste = data_test[,4])
+dot%>% kable() %>% kable_styling()
+```
+
+Wartości rzeczywiste znacząco odbiegają od wartości obliczonych metodą MNK oraz Bayesowską. Co istotne, w obu przypadkach prognozy są zaniżone.\
+
+W kolejnym kroku wyznaczono HDPI dla prognoz, których wyniki zawarto poniżej:
+
+```{r}
+hpdi.Y <- list()
+
+for( i in 1:length(brzegoweY)) {
+  temp <- hdi(rt.scaled(n = 1000,df = brzegoweY[[i]][[3]], mean = brzegoweY[[i]][[1]], sd = brzegoweY[[i]][[2]]))
+  hpdi.Y <- c(hpdi.Y, list(c(temp[1], temp[2])))
+  names(hpdi.Y)[i] <- paste0("hpdi.Y", as.character(i))
+}
+
+lower <- c()
+upper <- c()
+for(i in 1:length(hpdi.Y)){
+  lower[i] = hpdi.Y[[i]][[1]]
+  upper[i] = hpdi.Y[[i]][[2]]
+}
+BayesprogInterval <- data.frame(Low=lower,Up=upper)
+
+MNKprogInterval <- predict(modelMNK,data_test,interval = "confidence")
+
+interv = data.frame(MNK = MNKprogInterval[,2:3],Bayes=BayesprogInterval)
+interv%>% kable() %>% kable_styling()
+```
+
+Wnioskiem płynącym z powyższych wartości jest bardzo duża róznica szerokości przedziałów dla MNK i Bayesa. Przedziały z metody bayesowskiej są o wiele szersze tj charakteryzują się dużym rozstępem.
+
+
+<br/>
+
+W następnym kroku wyznaczono błędy prognozy.
+```{r}
+RMSE_MNK <- rmse(dot$CCS,dot$MNK)
+MAE_MNK <- mae(dot$CCS,dot$MNK)
+MAPE_MNK<-mape(dot$CCS,dot$MNK)
+
+
+RMSE_Bayes<-rmse(dot$CCS,dot$Bayes)
+MAE_Bayes<- mae(dot$CCS,dot$Bayes)
+MAPE_Bayes<-mape(dot$CCS,dot$Bayes)
+
+bledy <- data.frame(RMSE = c(RMSE_MNK,RMSE_Bayes), MAE = c(MAE_MNK,MAE_Bayes), MAPE = c(MAPE_MNK,MAPE_Bayes), row.names = c("MNK", "BAYES"))
+bledy %>% kable() %>% kable_styling()
+```
+Wskazują one jasno na przewagę metody Bayesa nad MNK, ponieważ wszystkie wartości są mniejsze dla tego sposobu modelowania.
+
+## Istotność zmiennych
+
+W kolejnym etapie analizy zbadana została istotność zmiennych. Celem testowania istotności zastosowano test F oraz porównania modeli dla sposobu Bayesowskiego. Utworzono odpowiedni model Bayesowski z pominięciem dwóch zmiennych. Ze względu na duże wartości liczbowe współczynników jakie osiągają poszczególne wartości w modelach, wzór na czynnik Bayesowski został skorygowany a jego postać odpowiednio uproszczona.
+```{r}
+
+model0R <- lm(data = data_apriori, CCS ~ Age + Cement)
+summary.0R <- summary(model0R)
+
+beta0R <- as.vector(model0R$coefficients)
+
+X0R <- matrix(data = c( rep(1, 100) , data_apriori$Cement,  data_apriori$Age), ncol = 3)
+sigma0R <- solve(t(X0R) %*% X0R)
+
+alfa0R <- nrow(data_apriori)-ncol(data_apriori)-2
+delta0R <- sum(model0R$residuals^2)
+
+X <- matrix(data = c( rep(1, nrow(data)) , data$Cement, data$Age), ncol = 3)
+sigm <- as.matrix(sigma0R)
+y <- as.matrix(data$CCS)
+
+sigm1 <- solve( t(X) %*% X + solve(sigm))
+
+beta1 <- sigm1 %*% ( t(X) %*% y + solve(sigm) %*% beta0R)
+
+alfa1 <- alfa0R + nrow(data)
+delta1 <- delta0R + t(y) %*% y - t(beta1) %*% solve(sigm1) %*% beta1 + t(beta0R)%*%solve(sigm)%*%beta0R
+
+prms_res = list(alfa1 = alfa1, delta1 = as.numeric(delta1), sigma1 = sigm1, beta1 = beta1)
+
+pyM1_p1 <- sqrt(det(sigma0)/det(prms$sigma1))
+pyM2_p1 <- sqrt(det(sigma0R)/det(prms_res$sigma1))
+part1 <- pyM1_p1/pyM2_p1
+
+alpha.1=nrow(data_apriori)+nrow(data)-ncol(data_apriori)
+
+alpha.0=nrow(data_apriori)-ncol(data_apriori)
+
+part2 <- ((delta0/delta0R)^alpha.0)*delta0*((prms_res$delta1/prms$delta1)^alpha.1)/prms$delta1
+part3 <- alpha.1/alpha.0
+
+R12 <- part1*part2*part3
+```
+
+Zatem wartość logarytmu ilorazu szans wynosi:
+```{r}
+log(R12)
+```
+Znając tę wartość możemy wnioskować o przewadze modelu bez restrykcji nad modelem z rekstrykcjami, co zweryfikowano jeszcze testem F w poniższej komórce. Jego hipoteza zerowa mówi o o braku łącznej istotności zmiennych.
+
+```{r}
+linearHypothesis(modelMNK, c("Age=0", "BFS=0"))
+```
+
+Przeprowadzony test dał w rezultacie bardzo niskie p-value, co potwierdza wniosek o przewadze modelu bez restrykcji oraz jego poprawność.
+
+
+## Podsumowanie
+
+W projekcie rozważono rozkłady a priori oraz a posteriori wykorzystjąc modelowanie metodą najmniejszych kwadratów oraz metodą bayesowską. W rezultacie, za najkorzystniejszą metodę można uznać wnioskowanie bayesowskie, na co wskazują błędy prognozy oraz testy modeli. 
